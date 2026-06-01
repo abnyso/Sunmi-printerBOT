@@ -54,6 +54,8 @@ class SunmiPrinter(private val context: Context) {
         svc.lineWrap(TAIL_LINES, null)
     }
 
+    // Wraps text to fit the paper width for the current font size.
+    // Words longer than a line are hyphenated.
     private fun wordWrap(text: String, maxChars: Int): String {
         val result = StringBuilder()
         for (paragraph in text.split("\n")) {
@@ -108,7 +110,7 @@ class SunmiPrinter(private val context: Context) {
         svc.printText("\n", null)
         svc.setAlignment(1, null)
         svc.printText("--------------------------------\n", null)
-        svc.printText("NOTE\n", null)
+        svc.printText("NOTES\n", null)
         svc.lineWrap(6, null)
         svc.setAlignment(1, null)
         svc.printText("--------------------------------\n", null)
@@ -142,6 +144,7 @@ class SunmiPrinter(private val context: Context) {
     }
 
     fun cut() {
+        // Not supported on all models (e.g. V2 Pro); fail silently.
         try {
             printerService?.cutPaper(null)
         } catch (e: Exception) {
@@ -156,6 +159,8 @@ class SunmiPrinter(private val context: Context) {
         return Bitmap.createScaledBitmap(bitmap, PRINTER_WIDTH_PX, newHeight, true)
     }
 
+    // Floyd-Steinberg dithering: converts grayscale to 1-bit
+    // so photos print with the illusion of shading on a black/white head.
     private fun floydSteinbergDither(source: Bitmap): Bitmap {
         val w = source.width
         val h = source.height

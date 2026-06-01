@@ -23,6 +23,7 @@ class CalendarFetcher(private val context: Context) {
             val credential = GoogleAccountCredential.usingOAuth2(
                 context, listOf(CalendarScopes.CALENDAR_READONLY)
             )
+            // Set the account explicitly; selectedAccountName can be lost on a background thread.
             credential.selectedAccount = Account(accountName, "com.google")
             calendarService = Calendar.Builder(
                 NetHttpTransport(),
@@ -38,7 +39,7 @@ class CalendarFetcher(private val context: Context) {
     fun isReady(): Boolean = calendarService != null
 
     fun getEventsForDay(dateStr: String? = null): Pair<String, List<String>> {
-        val svc = calendarService ?: return Pair("Errore", listOf("Calendar non configurato"))
+        val svc = calendarService ?: return Pair("Error", listOf("Calendar not configured"))
 
         val cal = java.util.Calendar.getInstance()
         if (dateStr != null) {
@@ -61,10 +62,11 @@ class CalendarFetcher(private val context: Context) {
         cal.set(java.util.Calendar.SECOND, 59)
         val dayEnd = DateTime(cal.timeInMillis)
 
-        val titleDate = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ITALIAN).format(cal.time)
+        val titleDate = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ENGLISH).format(cal.time)
 
         return try {
             Log.d(TAG, "Fetching events from " + dayStart + " to " + dayEnd)
+            // Query every calendar, not just "primary".
             val calList = try {
                 svc.calendarList().list().execute().items ?: emptyList()
             } catch (e: Exception) {
@@ -87,6 +89,8 @@ class CalendarFetcher(private val context: Context) {
                         .execute()
                         .items ?: emptyList()
                     for (evt in evts) {
+                        // All-day events use a date (no timezone); compare the date
+                        // string to avoid pulling in the adjacent day's events.
                         if (evt.start?.date != null) {
                             val evtDate = evt.start.date.toString().substring(0, 10)
                             if (evtDate == targetDate) {
@@ -110,13 +114,14 @@ class CalendarFetcher(private val context: Context) {
             Log.d(TAG, "Got " + events.size + " events total")
 
             if (events.isEmpty()) {
-                Pair(titleDate, listOf("  Nessun evento"))
+                Pair(titleDate, listOf("  No events"))
             } else {
                 val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+                // Pin the timezone; relying on the device default caused off-by-one-hour times.
                 timeFmt.timeZone = TimeZone.getTimeZone("Europe/Rome")
                 val lines = events.map { event ->
                     val start = event.start
-                    val summary = event.summary ?: "(senza titolo)"
+                    val summary = event.summary ?: "(no title)"
                     val location = if (event.location != null) " @ " + event.location else ""
                     if (start?.dateTime != null) {
                         timeFmt.format(Date(start.dateTime.value)) + "  " + summary + location
@@ -128,7 +133,7 @@ class CalendarFetcher(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Calendar error: " + e.message, e)
-            Pair(titleDate, listOf("  Errore: " + e.message))
+            Pair(titleDate, listOf("  Error: " + e.message))
         }
     }
 }

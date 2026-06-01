@@ -47,7 +47,7 @@ class TelegramPollingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification("Bot attivo")
+        val notification = buildNotification("Bot running")
         startForeground(NOTIF_ID, notification)
         startPolling()
         startQueueProcessor()
@@ -93,9 +93,9 @@ class TelegramPollingService : Service() {
             val file = telegram.downloadPhoto(largest.fileId, imageDir)
             if (file != null) {
                 enqueueJob(PrintJob(type = "image", content = file.absolutePath))
-                telegram.sendMessage("Immagine accodata")
+                telegram.sendMessage("Image queued")
             } else {
-                telegram.sendMessage("Errore download immagine")
+                telegram.sendMessage("Image download error")
             }
             return
         }
@@ -105,35 +105,35 @@ class TelegramPollingService : Service() {
                 val parts = text.split(" ", limit = 2)
                 val dateArg = parts.getOrNull(1)
                 enqueueJob(PrintJob(type = "agenda", content = dateArg ?: "today"))
-                telegram.sendMessage("Agenda accodata")
+                telegram.sendMessage("Agenda queued")
             }
             text == "/status" -> {
                 val pending = db.printJobDao().getPending().size
                 val printerOk = if (printer.isReady()) "OK" else "NO"
                 val calOk = if (calendar.isReady()) "OK" else "NO"
-                telegram.sendMessage("Stampante: " + printerOk + "\nCalendar: " + calOk + "\nCoda: " + pending)
+                telegram.sendMessage("Printer: " + printerOk + "\nCalendar: " + calOk + "\nQueue: " + pending)
             }
             text == "/cut" -> {
                 printer.cut()
-                telegram.sendMessage("Carta tagliata")
+                telegram.sendMessage("Paper cut")
             }
             text.startsWith("/size") -> {
                 val parts = text.split(" ", limit = 2)
                 val size = parts.getOrNull(1)?.toFloatOrNull()
                 if (size != null && size in 16f..48f) {
                     printer.textSize = size
-                    telegram.sendMessage("Dimensione testo: " + size.toInt())
+                    telegram.sendMessage("Text size: " + size.toInt())
                 } else {
-                    telegram.sendMessage("Uso: /size 16-48" +
-                            "\nAttuale: " + printer.textSize.toInt() + "\nPiccolo=16 Normale=24 Grande=32 XL=48")
+                    telegram.sendMessage("Usage: /size 16-48" +
+                            "\nCurrent: " + printer.textSize.toInt() + "\nSmall=16 Normal=24 Large=32 XL=48")
                 }
             }
             text.startsWith("/") -> {
-                telegram.sendMessage("Comandi: /agenda [data] /status /cut\nOppure invia testo o foto")
+                telegram.sendMessage("Commands: /agenda [date] /status /cut /size\nOr send text or a photo to print")
             }
             else -> {
                 enqueueJob(PrintJob(type = "text", content = text))
-                telegram.sendMessage("Testo accodato")
+                telegram.sendMessage("Text queued")
             }
         }
     }
@@ -204,6 +204,8 @@ class TelegramPollingService : Service() {
         }
     }
 
+    // Android 7 / Sunmi ROM: the channel-based Notification.Builder constructor
+    // is unavailable, so use the deprecated single-arg constructor.
     @Suppress("DEPRECATION")
     private fun buildNotification(text: String): Notification {
         val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT)
