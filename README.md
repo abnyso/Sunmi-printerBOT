@@ -1,77 +1,134 @@
 # SunmiPrinterBot
 
-App Android per Sunmi V2 Pro che trasforma il POS in una stampante smart controllata via Telegram.
+Turn a **Sunmi V2 Pro** POS terminal into a Telegram-controlled thermal printer.
 
-## Funzionalità
-- **Stampa testo** → invia un messaggio al bot Telegram, viene stampato
-- **Stampa immagini** → invia una foto, viene ridimensionata a 384px e stampata
-- **Stampa agenda** → comando `/agenda` o `/agenda 2026-04-10` per stampare gli eventi del giorno
-- **Coda offline** → se il POS è offline, i messaggi vengono accodati e stampati alla riconnessione
-- **Reversibile al 100%** → disinstalla l'APK e il POS torna originale
+Send a message, photo, or calendar command to your private Telegram bot, and the Sunmi prints it. No server, no VPS, no domain required — the app polls Telegram directly from the device.
 
-## Prerequisiti
-- Android Studio (Hedgehog o successivo)
-- Sunmi V2 Pro con Google Play Services
-- Account Google con Calendar
-- Token Telegram Bot (da @BotFather)
+## Features
+
+- **Text printing** — send any text message to print it, with adjustable font size
+- **Image printing** — send a photo; it is auto-resized to 384px and dithered (Floyd–Steinberg) for clean thermal output
+- **Calendar agenda** — print the day's events from *all* your Google calendars
+- **Date selection** — print the agenda for any specific day
+- **Offline queue** — messages received while the printer is busy or offline are queued (Room/SQLite) and printed when ready
+- **Word wrapping** — long text wraps cleanly, accounting for the selected font size
+- **Boot persistence** — the bot restarts automatically after a device reboot
+- **Fully reversible** — uninstall the APK and the POS returns to stock; no hardware modification
+
+## Telegram commands
+
+| Command | Action |
+|---|---|
+| *(any text)* | Print the text |
+| *(photo)* | Print the image (auto-resized + dithered) |
+| `/agenda` | Print today's events |
+| `/agenda 2026-04-15` | Print events for a specific date |
+| `/size` | Show current font size and options |
+| `/size 32` | Set font size (range 16–48) |
+| `/status` | Show system status (printer, calendar, queue) |
+| `/cut` | Feed and cut paper (if supported by the device) |
+
+## Requirements
+
+- Sunmi V2 Pro (with Google Play Services)
+- Android Studio (Hedgehog or newer)
+- A Google account with Calendar
+- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 
 ## Setup
 
-### 1. Crea il Telegram Bot
-1. Apri Telegram → cerca `@BotFather`
-2. `/newbot` → scegli nome e username
-3. Copia il **token** (es. `123456:ABC-DEF...`)
-4. Invia un messaggio al bot dal tuo account
-5. Vai su `https://api.telegram.org/bot<TOKEN>/getUpdates` → copia il tuo `chat_id`
+### 1. Create a Telegram bot
 
-### 2. Configura Google Calendar API
-1. Vai su [Google Cloud Console](https://console.cloud.google.com/)
-2. Crea un nuovo progetto
-3. Abilita **Google Calendar API**
-4. Crea credenziali → **OAuth 2.0 Client ID** → tipo **Android**
-5. Package name: `com.baba.sunmiprinterbot`
-6. SHA-1: ottienilo con:
-   ```
-   keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android
-   ```
-7. Scarica `credentials.json` (non serve nel progetto, l'OAuth è on-device via Google Sign-In)
+1. Open Telegram, talk to **@BotFather**, send `/newbot`
+2. Choose a name and a username ending in `bot`
+3. Copy the **token** (e.g. `123456789:ABC-DEF...`)
+4. Send any message to your new bot
+5. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` and find your `chat.id`
 
-### 3. Build & Install
-1. Apri il progetto in Android Studio
-2. Inserisci il token Telegram e il tuo chat_id in `app/src/main/res/values/secrets.xml`
-3. Build → genera APK
-4. Installa sul Sunmi V2 Pro via ADB o file manager
+### 2. Configure Google Calendar API
 
-### 4. Primo avvio
-1. Apri l'app → premi "Accedi con Google" → autorizza Calendar read-only
-2. L'app mostra "Bot attivo" → il service gira in background
-3. Testa: invia un messaggio al bot su Telegram
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and create a project
+2. Enable the **Google Calendar API**
+3. Configure the **OAuth consent screen** (External), add the `calendar.readonly` scope, and add your Google address as a **test user**
+4. Create an **OAuth Client ID** of type **Android**:
+   - Package name: `com.baba.sunmiprinterbot`
+   - SHA-1: get it with
+     ```
+     keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep SHA1
+     ```
+5. Also create an **OAuth Client ID** of type **Web application** (required for Google Sign-In on Android; you don't need to configure it further)
 
-## Comandi Telegram
-| Comando | Azione |
-|---|---|
-| qualsiasi testo | Stampa il testo |
-| foto/immagine | Stampa l'immagine (auto-resize 384px) |
-| `/agenda` | Stampa eventi di oggi |
-| `/agenda 2026-04-10` | Stampa eventi della data specificata |
-| `/status` | Risponde con stato connessione e coda |
-| `/cut` | Avanza e taglia la carta |
+### 3. Configure secrets
 
-## Struttura progetto
+Copy the template and fill in your values:
+
+```bash
+cp app/src/main/res/values/secrets.xml.template app/src/main/res/values/secrets.xml
+```
+
+Edit `secrets.xml`:
+
+```xml
+<resources>
+    <string name="telegram_bot_token">YOUR_BOT_TOKEN</string>
+    <string name="telegram_chat_id">YOUR_CHAT_ID</string>
+    <string name="google_client_id">YOUR_WEB_CLIENT_ID.apps.googleusercontent.com</string>
+</resources>
+```
+
+> `secrets.xml` is git-ignored and will never be committed.
+
+### 4. Build and install
+
+Open the project in Android Studio and build, or use ADB:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 5. First run
+
+1. Open the app on the Sunmi
+2. Tap **Sign in with Google** and authorize Calendar read-only access
+3. Tap **Start Bot**
+4. Send a test message to your bot
+
+## Architecture
+
+```
+Telegram (long polling)  ──►  TelegramPollingService  ──►  Room queue  ──►  SunmiPrinter
+                                       │
+                                       └──►  CalendarFetcher (Google Calendar API)
+```
+
+- **TelegramPollingService** — foreground service; long-polls Telegram, routes commands, drives the print queue
+- **TelegramApi** — thin Telegram Bot API client (OkHttp + Gson); persists the update offset
+- **SunmiPrinter** — wraps the Sunmi Printer SDK (AIDL); handles text, formatted agenda, and dithered images
+- **CalendarFetcher** — Google Calendar API client; aggregates events across all calendars
+- **PrintQueue** — Room/SQLite offline queue with retry
+
+## Project structure
+
 ```
 app/src/main/java/com/baba/sunmiprinterbot/
-├── MainActivity.kt              # UI minimale + Google Sign-In
+├── MainActivity.kt
+├── App.kt                      # Application + BootReceiver
 ├── service/
-│   ├── TelegramPollingService.kt # Long polling Telegram
-│   └── PrintQueueService.kt     # Gestione coda offline
+│   └── TelegramPollingService.kt
 ├── printer/
-│   └── SunmiPrinter.kt          # Wrapper Sunmi SDK
+│   └── SunmiPrinter.kt
 ├── calendar/
-│   └── CalendarFetcher.kt       # Google Calendar API
+│   └── CalendarFetcher.kt
 ├── queue/
-│   ├── PrintJob.kt              # Entity Room
-│   ├── PrintJobDao.kt           # DAO
-│   └── AppDatabase.kt           # Room database
+│   └── PrintQueue.kt           # Room entity, DAO, database
 └── telegram/
-    └── TelegramApi.kt           # Client API Telegram
+    └── TelegramApi.kt
 ```
+
+## Device-specific notes
+
+See [DEVICE_NOTES.md](DEVICE_NOTES.md) for the quirks discovered on the Sunmi V2 Pro (unsupported `cutPaper`, timezone handling, Android 7 notification API, etc.).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
