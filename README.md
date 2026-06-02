@@ -8,9 +8,12 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 
 - **Text printing** — send any text message to print it, with adjustable font size
 - **Image printing** — send a photo; it is auto-resized to 384px and dithered (Floyd–Steinberg) for clean thermal output
-- **Calendar agenda** — print the day's events from *all* your Google calendars
-- **Date selection** — print the agenda for any specific day
-- **Offline queue** — messages received while the printer is busy or offline are queued (Room/SQLite) and printed when ready
+- **Document / PDF printing** — send a PDF (first page is rendered) or an image file
+- **QR codes** — `/qr <text|url>` prints a scannable QR code
+- **Calendar agenda** — print events from *all* your Google calendars for today, tomorrow, a specific date, or the next 7 days
+- **Daily agenda** — optionally auto-print today's agenda every morning at a chosen hour
+- **Offline queue** — messages received while the printer is busy or offline are queued (Room/SQLite) and printed when ready, with a retry cap and failure reporting
+- **Print confirmations** — the bot replies when a job is actually printed, queued, or has failed
 - **Word wrapping** — long text wraps cleanly, accounting for the selected font size
 - **Boot persistence** — the bot restarts automatically after a device reboot
 - **Fully reversible** — uninstall the APK and the POS returns to stock; no hardware modification
@@ -20,12 +23,17 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 | Command | Action |
 |---|---|
 | *(any text)* | Print the text |
-| *(photo)* | Print the image (auto-resized + dithered) |
+| *(photo / image / PDF)* | Print it (auto-resized + dithered; PDF = first page) |
 | `/agenda` | Print today's events |
+| `/agenda tomorrow` | Print tomorrow's events |
+| `/agenda week` | Print the next 7 days |
 | `/agenda 2026-04-15` | Print events for a specific date |
-| `/size` | Show current font size and options |
-| `/size 32` | Set font size (range 16–48) |
-| `/status` | Show system status (printer, calendar, queue) |
+| `/qr <text\|url>` | Print a QR code |
+| `/size` / `/size 32` | Show / set font size (range 16–48) |
+| `/daily 7` / `/daily off` | Auto-print today's agenda each morning at HH:00, or disable |
+| `/status` | Show system status (printer, calendar, queue, failed) |
+| `/retry` | Requeue all permanently failed jobs |
+| `/clearqueue` | Drop all queued (not yet printed) jobs |
 | `/cut` | Feed and cut paper (if supported by the device) |
 
 ## Requirements
@@ -63,8 +71,10 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 Copy the template and fill in your values:
 
 ```bash
-cp app/src/main/res/values/secrets.xml.template app/src/main/res/values/secrets.xml
+cp secrets.xml.template app/src/main/res/values/secrets.xml
 ```
+
+> `google_client_id` must be the **Web application** client ID — it's used as the Google Sign-In server auth code. It is read from this resource at build time, never hardcoded.
 
 Edit `secrets.xml`:
 

@@ -89,7 +89,7 @@ class MainActivity : AppCompatActivity() {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(Scope(CalendarScopes.CALENDAR_READONLY))
-            .requestServerAuthCode("1064090209697-kcou7b2t88h110g510ooosoht0dbgog7.apps.googleusercontent.com")
+            .requestServerAuthCode(getString(R.string.google_client_id))
             .build()
         val client = GoogleSignIn.getClient(this, gso)
         googleSignInLauncher.launch(client.signInIntent)

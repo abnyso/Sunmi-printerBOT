@@ -11,7 +11,8 @@ The V2 Pro tested here runs **Android 7.1 (API 25)**. This has several consequen
 
 ## Printer SDK
 
-- **`cutPaper()` is not supported** on this model. Calling it throws `this model does not support this method!`. The call is wrapped in a try/catch so it fails silently; the queue must not treat this as a job failure, otherwise the job is retried forever.
+- **`cutPaper()` is not supported** on this model. Calling it throws `this model does not support this method!`. `SunmiPrinter.cut()` catches this and returns `false`, so `/cut` reports honestly instead of pretending success. The cut is invoked on demand only (never as a queued job), so it can't poison the retry loop.
+- **Queue retry cap.** Print jobs are retried at most `MAX_RETRIES` (5) times; after that they are marked `failed` and the user is notified on Telegram (`/retry` requeues them). Without this cap a permanently failing job — e.g. an agenda requested before Google Sign-In, or a corrupt image — would be retried every 2 seconds forever.
 - The print head is **384px wide** (58mm at ~8 dots/mm). Images are resized to this width.
 - The thermal printer is **1-bit** (pure black/white). Grayscale images look flat without dithering, so a **Floyd–Steinberg** dither is applied before printing.
 
