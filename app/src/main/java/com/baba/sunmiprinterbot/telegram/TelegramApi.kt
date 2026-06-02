@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -23,10 +24,6 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
 
     private fun baseUrl(): String = "https://api.telegram.org/bot" + token
 
-    private fun saveOffset() {
-        prefs.edit().putLong("last_update_id", lastUpdateId).apply()
-    }
-
     data class TgResponse(val ok: Boolean, val result: List<TgUpdate>?)
     data class TgUpdate(
         @SerializedName("update_id") val updateId: Long,
@@ -36,7 +33,9 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
         @SerializedName("message_id") val messageId: Long,
         val chat: TgChat,
         val text: String?,
-        val photo: List<TgPhotoSize>?
+        val caption: String?,
+        val photo: List<TgPhotoSize>?,
+        val document: TgDocument?
     )
     data class TgChat(val id: Long)
     data class TgPhotoSize(
@@ -44,39 +43,46 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
         val width: Int,
         val height: Int
     )
+    data class TgDocument(
+        @SerializedName("file_id") val fileId: String,
+        @SerializedName("file_name") val fileName: String?,
+        @SerializedName("mime_type") val mimeType: String?
+    )
     data class TgFileResponse(val ok: Boolean, val result: TgFile?)
     data class TgFile(
         @SerializedName("file_path") val filePath: String?
     )
 
+    fun isAllowed(update: TgUpdate): Boolean =
+        update.message?.chat?.id.toString() == allowedChatId
+
+    // Returns every update from the long poll. The offset is NOT advanced here:
+    // the caller must confirm each update via confirmOffset() only after it has
+    // been durably enqueued, so a crash mid-processing cannot drop a message.
     fun getUpdates(): List<TgUpdate> {
         return try {
             val offset = lastUpdateId + 1
             val url = baseUrl() + "/getUpdates?offset=" + offset + "&timeout=30"
-            Log.d(TAG, "Polling offset=" + offset)
             val request = Request.Builder().url(url).build()
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: return emptyList()
-            Log.d(TAG, "Response len=" + body.length)
             val parsed = gson.fromJson(body, TgResponse::class.java)
-
-            val updates = parsed.result
-                ?.filter { it.message?.chat?.id.toString() == allowedChatId }
-                ?: emptyList()
-
-            parsed.result?.maxByOrNull { it.updateId }?.let {
-                lastUpdateId = it.updateId
-                saveOffset()
-            }
-
-            updates
+            parsed.result ?: emptyList()
         } catch (e: Exception) {
             Log.e(TAG, "Polling error: " + e.message)
             emptyList()
         }
     }
 
-    fun downloadPhoto(fileId: String, destDir: File): File? {
+    // Acknowledge an update so it is never fetched again. Persist immediately.
+    fun confirmOffset(updateId: Long) {
+        if (updateId > lastUpdateId) {
+            lastUpdateId = updateId
+            prefs.edit().putLong("last_update_id", lastUpdateId).apply()
+        }
+    }
+
+    fun downloadFile(fileId: String, destDir: File): File? {
         return try {
             val fileUrl = baseUrl() + "/getFile?file_id=" + fileId
             val fileReq = Request.Builder().url(fileUrl).build()
@@ -90,21 +96,24 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
             val dlResp = client.newCall(dlReq).execute()
             val bytes = dlResp.body?.bytes() ?: return null
 
-            val ext = filePath.substringAfterLast('.', "jpg")
+            val ext = filePath.substringAfterLast('.', "bin")
             val dest = File(destDir, "tg_" + System.currentTimeMillis() + "." + ext)
             dest.writeBytes(bytes)
             dest
         } catch (e: Exception) {
-            Log.e(TAG, "Download photo error: " + e.message)
+            Log.e(TAG, "Download file error: " + e.message)
             null
         }
     }
 
+    // POST with a form body, so long messages aren't capped by URL length.
     fun sendMessage(text: String) {
         try {
-            val url = baseUrl() + "/sendMessage?chat_id=" + allowedChatId +
-                "&text=" + java.net.URLEncoder.encode(text, "UTF-8")
-            val request = Request.Builder().url(url).build()
+            val body = FormBody.Builder()
+                .add("chat_id", allowedChatId)
+                .add("text", text)
+                .build()
+            val request = Request.Builder().url(baseUrl() + "/sendMessage").post(body).build()
             client.newCall(request).execute().close()
         } catch (e: Exception) {
             Log.e(TAG, "Send error: " + e.message)

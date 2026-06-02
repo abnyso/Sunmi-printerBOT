@@ -14,7 +14,8 @@ class SunmiPrinter(private val context: Context) {
     private var isConnected = false
     private val PRINTER_WIDTH_PX = 384
     private val TAIL_LINES = 4
-    var textSize: Float = 24f
+    // Read from the queue thread, written from the polling thread.
+    @Volatile var textSize: Float = 24f
 
     private val connectCallback = object : InnerPrinterCallback() {
         override fun onConnected(service: SunmiPrinterService?) {
@@ -119,7 +120,7 @@ class SunmiPrinter(private val context: Context) {
 
     fun printImage(imagePath: String) {
         val svc = printerService ?: return
-        val original = BitmapFactory.decodeFile(imagePath) ?: return
+        val original = decodeSampled(imagePath) ?: return
         val resized = resizeToPrinterWidth(original)
         val dithered = floydSteinbergDither(resized)
         svc.printerInit(null)
@@ -143,13 +144,39 @@ class SunmiPrinter(private val context: Context) {
         if (dithered != resized) dithered.recycle()
     }
 
-    fun cut() {
-        // Not supported on all models (e.g. V2 Pro); fail silently.
-        try {
-            printerService?.cutPaper(null)
+    // Returns true only if the cut actually happened. The V2 Pro and other
+    // models throw "this model does not support this method!"; report that
+    // honestly instead of pretending the paper was cut.
+    fun cut(): Boolean {
+        val svc = printerService ?: return false
+        return try {
+            svc.cutPaper(null)
+            true
         } catch (e: Exception) {
             Log.w(TAG, "Cut not supported")
+            false
         }
+    }
+
+    // Prints a QR code centered on the paper. moduleSize 1-16, the SDK clamps it.
+    fun printQRCode(content: String, moduleSize: Int = 8) {
+        val svc = printerService ?: return
+        svc.printerInit(null)
+        svc.setAlignment(1, null)
+        svc.printQRCode(content, moduleSize, 3, null)
+        svc.lineWrap(TAIL_LINES, null)
+    }
+
+    // Decodes only large enough to cover the printer width, halving on each
+    // step, so a 12 MP photo never inflates to a full-resolution bitmap (OOM).
+    private fun decodeSampled(imagePath: String): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(imagePath, bounds)
+        if (bounds.outWidth <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= PRINTER_WIDTH_PX) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeFile(imagePath, opts)
     }
 
     private fun resizeToPrinterWidth(bitmap: Bitmap): Bitmap {
