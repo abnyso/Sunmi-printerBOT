@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
@@ -31,7 +32,9 @@ class TelegramPollingService : Service() {
     private val TAG = "PrinterBotService"
     private val CHANNEL_ID = "printer_bot_channel"
     private val NOTIF_ID = 1
+    private val ALERT_NOTIF_ID = 2
     private val PRINTER_WIDTH_PX = 384
+    private val DEFAULT_PDF_PAGES = 5
 
     private lateinit var telegram: TelegramApi
     private lateinit var printer: SunmiPrinter
@@ -54,6 +57,9 @@ class TelegramPollingService : Service() {
         db = AppDatabase.get(this)
         printer.bind()
         printer.textSize = prefs.getFloat("text_size", 24f)
+        calendar.zone = zone()
+        prefs.getString("install_date", null) ?: prefs.edit()
+            .putString("install_date", isoDate()).apply()
         prefs.getString("google_account", null)?.let { calendar.setup(it) }
         createNotificationChannel()
     }
@@ -79,23 +85,38 @@ class TelegramPollingService : Service() {
             Log.d(TAG, "Polling loop started")
             var backoff = 3000L
             while (isActive) {
-                try {
-                    if (!isOnline()) {
-                        delay(5000)
-                        continue
+                if (!isOnline()) {
+                    delay(5000)
+                    continue
+                }
+                when (val res = telegram.getUpdates()) {
+                    is TelegramApi.PollResult.Ok -> {
+                        for (update in res.updates) {
+                            try {
+                                if (telegram.isAllowed(update)) processUpdate(update)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "processUpdate error: " + e.message)
+                            }
+                            // Acknowledge after handling (even foreign updates) so a
+                            // crash mid-processing re-delivers instead of dropping.
+                            telegram.confirmOffset(update.updateId)
+                        }
+                        backoff = 3000L
                     }
-                    val updates = telegram.getUpdates()
-                    for (update in updates) {
-                        if (telegram.isAllowed(update)) processUpdate(update)
-                        // Acknowledge after handling (even foreign updates) so a
-                        // crash mid-processing re-delivers instead of dropping.
-                        telegram.confirmOffset(update.updateId)
+                    is TelegramApi.PollResult.Fatal -> {
+                        // Bad token or bot blocked: Telegram is unusable, so we
+                        // can't notify over it. Raise a local Android alert and stop.
+                        Log.e(TAG, "Fatal Telegram error " + res.code + ": " + res.description)
+                        alert("Telegram error " + res.code,
+                            if (res.code == 401) "Invalid bot token — check secrets.xml"
+                            else "Bot blocked or forbidden (403)")
+                        updateNotification("Stopped: Telegram error " + res.code)
+                        break
                     }
-                    backoff = 3000L
-                } catch (e: Exception) {
-                    Log.e(TAG, "Polling loop error: " + e.message)
-                    delay(backoff)
-                    backoff = minOf(backoff * 2, 60000L)
+                    is TelegramApi.PollResult.Transient -> {
+                        delay(backoff)
+                        backoff = minOf(backoff * 2, 60000L)
+                    }
                 }
             }
         }
@@ -137,12 +158,14 @@ class TelegramPollingService : Service() {
                 val pending = db.printJobDao().getPending().size
                 val failed = db.printJobDao().getFailed().size
                 telegram.sendMessage(
-                    "Printer: " + (if (printer.isReady()) "OK" else "NO") +
+                    "Printer: " + printerStateLabel() +
                     "\nCalendar: " + (if (calendar.isReady()) "OK" else "NO") +
                     "\nQueue: " + pending + "\nFailed: " + failed +
-                    "\nDaily agenda: " + dailyAgendaStatus()
+                    "\nDaily agenda: " + dailyAgendaStatus() +
+                    "\nTimezone: " + zone().id
                 )
             }
+            text == "/stats" -> telegram.sendMessage(statsText())
             text == "/cut" -> {
                 telegram.sendMessage(if (printer.cut()) "Paper cut" else "Cut not supported on this model")
             }
@@ -155,6 +178,8 @@ class TelegramPollingService : Service() {
                 telegram.sendMessage("Cleared " + n + " queued job(s)")
             }
             text.startsWith("/daily") -> handleDailyCommand(text)
+            text.startsWith("/tz") -> handleTzCommand(text)
+            text.startsWith("/pdfpages") -> handlePdfPagesCommand(text)
             text.startsWith("/size") -> {
                 val size = text.split(" ", limit = 2).getOrNull(1)?.toFloatOrNull()
                 if (size != null && size in 16f..48f) {
@@ -189,13 +214,15 @@ class TelegramPollingService : Service() {
             return
         }
         if (isPdf) {
-            val png = renderPdfFirstPage(file)
+            val maxPages = prefs.getInt("pdf_max_pages", DEFAULT_PDF_PAGES)
+            val pages = renderPdfPages(file, maxPages)
             file.delete()
-            if (png != null) {
-                enqueue(PrintJob(type = "image", content = png.absolutePath))
-                telegram.sendMessage("PDF queued (page 1)")
-            } else {
+            if (pages.first.isEmpty()) {
                 telegram.sendMessage("PDF render error")
+            } else {
+                for (png in pages.first) enqueue(PrintJob(type = "image", content = png.absolutePath))
+                val truncated = if (pages.second) " (truncated to " + pages.first.size + " of more)" else ""
+                telegram.sendMessage("PDF queued: " + pages.first.size + " page(s)" + truncated)
             }
         } else {
             enqueue(PrintJob(type = "image", content = file.absolutePath))
@@ -203,32 +230,39 @@ class TelegramPollingService : Service() {
         }
     }
 
-    // Renders the first PDF page to a white-background PNG at the printer width.
-    private fun renderPdfFirstPage(pdf: File): File? {
+    // Renders up to maxPages (0 = all) to white-background PNGs at printer width.
+    // Returns the page files plus a flag telling whether more pages were skipped.
+    private fun renderPdfPages(pdf: File, maxPages: Int): Pair<List<File>, Boolean> {
         var pfd: ParcelFileDescriptor? = null
         var renderer: PdfRenderer? = null
-        return try {
+        val out = mutableListOf<File>()
+        var truncated = false
+        try {
             pfd = ParcelFileDescriptor.open(pdf, ParcelFileDescriptor.MODE_READ_ONLY)
             renderer = PdfRenderer(pfd)
-            if (renderer.pageCount == 0) return null
-            val page = renderer.openPage(0)
-            val scale = PRINTER_WIDTH_PX.toFloat() / page.width
-            val h = (page.height * scale).toInt().coerceAtLeast(1)
-            val bmp = Bitmap.createBitmap(PRINTER_WIDTH_PX, h, Bitmap.Config.ARGB_8888)
-            Canvas(bmp).drawColor(Color.WHITE)
-            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-            page.close()
-            val out = File(imagesDir(), "pdf_" + System.currentTimeMillis() + ".png")
-            out.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            bmp.recycle()
-            out
+            val total = renderer.pageCount
+            val limit = if (maxPages <= 0) total else minOf(maxPages, total)
+            truncated = limit < total
+            for (i in 0 until limit) {
+                val page = renderer.openPage(i)
+                val scale = PRINTER_WIDTH_PX.toFloat() / page.width
+                val h = (page.height * scale).toInt().coerceAtLeast(1)
+                val bmp = Bitmap.createBitmap(PRINTER_WIDTH_PX, h, Bitmap.Config.ARGB_8888)
+                Canvas(bmp).drawColor(Color.WHITE)
+                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                page.close()
+                val png = File(imagesDir(), "pdf_" + System.currentTimeMillis() + "_" + i + ".png")
+                png.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                bmp.recycle()
+                out.add(png)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "PDF render error: " + e.message)
-            null
         } finally {
             try { renderer?.close() } catch (_: Exception) {}
             try { pfd?.close() } catch (_: Exception) {}
         }
+        return Pair(out, truncated)
     }
 
     private fun handleDailyCommand(text: String) {
@@ -251,6 +285,42 @@ class TelegramPollingService : Service() {
         }
     }
 
+    private fun handleTzCommand(text: String) {
+        val arg = text.split(" ", limit = 2).getOrNull(1)?.trim()
+        when {
+            arg == null -> telegram.sendMessage("Timezone: " + zone().id +
+                    "\nUsage: /tz Europe/Rome  or  /tz default")
+            arg.equals("default", true) -> {
+                prefs.edit().remove("timezone").apply()
+                calendar.zone = zone()
+                telegram.sendMessage("Timezone reset to device default: " + zone().id)
+            }
+            else -> {
+                val tz = TimeZone.getTimeZone(arg)
+                // getTimeZone falls back to GMT for unknown IDs; reject that unless asked.
+                if (tz.id == "GMT" && !arg.equals("GMT", true) && !arg.equals("UTC", true)) {
+                    telegram.sendMessage("Unknown timezone: " + arg + "\nUse an IANA id like Europe/Rome")
+                } else {
+                    prefs.edit().putString("timezone", tz.id).apply()
+                    calendar.zone = tz
+                    telegram.sendMessage("Timezone set to " + tz.id)
+                }
+            }
+        }
+    }
+
+    private fun handlePdfPagesCommand(text: String) {
+        val arg = text.split(" ", limit = 2).getOrNull(1)?.trim()
+        val n = arg?.toIntOrNull()
+        if (n == null || n < 0) {
+            telegram.sendMessage("PDF page limit: " + prefs.getInt("pdf_max_pages", DEFAULT_PDF_PAGES) +
+                    " (0 = all)\nUsage: /pdfpages 5")
+        } else {
+            prefs.edit().putInt("pdf_max_pages", n).apply()
+            telegram.sendMessage("PDF page limit set to " + (if (n == 0) "all" else n.toString()))
+        }
+    }
+
     private fun dailyAgendaStatus(): String {
         val h = prefs.getInt("daily_agenda_hour", -1)
         return if (h < 0) "off" else h.toString() + ":00"
@@ -266,11 +336,12 @@ class TelegramPollingService : Service() {
             while (isActive) {
                 try {
                     maybeEnqueueDailyAgenda()
-                    if (printer.isReady()) {
+                    if (printer.isReady() && printerReadyToPrint()) {
                         for (job in db.printJobDao().getPending()) {
                             if (executeJob(job)) {
                                 db.printJobDao().markPrinted(job.id)
                                 cleanupJobFile(job)
+                                recordStat(job)
                                 telegram.sendMessage(printedConfirmation(job))
                             } else {
                                 db.printJobDao().incrementRetry(job.id)
@@ -291,6 +362,40 @@ class TelegramPollingService : Service() {
                 delay(2000)
             }
         }
+    }
+
+    // Returns true if the printer is in a state that can print. When the head
+    // reports paper out / overheat / cover open we DON'T touch the queue (no
+    // retries are burned); we just notify once and wait for it to recover.
+    private fun printerReadyToPrint(): Boolean {
+        val st = printer.paperStatus()
+        // -1 = state query unsupported on this model; assume we can print.
+        if (st == -1 || st == 1) {
+            if (prefs.getBoolean("printer_alerted", false)) {
+                prefs.edit().putBoolean("printer_alerted", false).apply()
+                telegram.sendMessage("Printer back to normal")
+            }
+            return true
+        }
+        if (!prefs.getBoolean("printer_alerted", false)) {
+            prefs.edit().putBoolean("printer_alerted", true).apply()
+            telegram.sendMessage("Printing paused: " + statusReason(st))
+        }
+        return false
+    }
+
+    private fun statusReason(code: Int): String = when (code) {
+        2 -> "printer preparing"
+        4 -> "OUT OF PAPER"
+        5 -> "overheated"
+        6 -> "cover open"
+        else -> "abnormal state (" + code + ")"
+    }
+
+    private fun printerStateLabel(): String {
+        if (!printer.isReady()) return "NO"
+        val st = printer.paperStatus()
+        return if (st == -1 || st == 1) "OK" else statusReason(st)
     }
 
     private fun executeJob(job: PrintJob): Boolean {
@@ -321,6 +426,23 @@ class TelegramPollingService : Service() {
         }
     }
 
+    private fun recordStat(job: PrintJob) {
+        prefs.edit()
+            .putInt("stat_total", prefs.getInt("stat_total", 0) + 1)
+            .putInt("stat_" + job.type, prefs.getInt("stat_" + job.type, 0) + 1)
+            .apply()
+    }
+
+    private fun statsText(): String {
+        val since = prefs.getString("install_date", "?")
+        return "Printed since " + since + ":\n" +
+                "Total: " + prefs.getInt("stat_total", 0) +
+                "\nText: " + prefs.getInt("stat_text", 0) +
+                "\nImages: " + prefs.getInt("stat_image", 0) +
+                "\nQR: " + prefs.getInt("stat_qr", 0) +
+                "\nAgenda: " + prefs.getInt("stat_agenda", 0)
+    }
+
     private fun printedConfirmation(job: PrintJob): String = "Printed: " + jobLabel(job)
 
     private fun jobLabel(job: PrintJob): String = when (job.type) {
@@ -335,9 +457,8 @@ class TelegramPollingService : Service() {
     private suspend fun maybeEnqueueDailyAgenda() {
         val hour = prefs.getInt("daily_agenda_hour", -1)
         if (hour < 0) return
-        val zone = TimeZone.getTimeZone("Europe/Rome")
-        val cal = java.util.Calendar.getInstance(zone)
-        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = zone }.format(cal.time)
+        val cal = java.util.Calendar.getInstance(zone())
+        val today = isoDate()
         if (cal.get(java.util.Calendar.HOUR_OF_DAY) < hour) return
         if (prefs.getString("last_agenda_date", null) == today) return
         prefs.edit().putString("last_agenda_date", today).apply()
@@ -346,20 +467,31 @@ class TelegramPollingService : Service() {
     }
 
     private fun helpText(): String =
-        "Send text or a photo to print.\n" +
+        "Send text, a photo, or a PDF to print.\n" +
         "/agenda [today|tomorrow|week|YYYY-MM-DD]\n" +
         "/qr <text|url>\n" +
         "/size 16-48\n" +
         "/daily <0-23|off>\n" +
-        "/status  /retry  /clearqueue  /cut"
+        "/tz <IANA|default>\n" +
+        "/pdfpages <n|0=all>\n" +
+        "/status  /stats  /retry  /clearqueue  /cut"
+
+    private fun zone(): TimeZone {
+        val id = prefs.getString("timezone", null)
+        return if (id != null) TimeZone.getTimeZone(id) else TimeZone.getDefault()
+    }
+
+    private fun isoDate(): String =
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = zone() }
+            .format(java.util.Calendar.getInstance(zone()).time)
 
     private fun imagesDir(): File = File(filesDir, "images").apply { mkdirs() }
 
-    @Suppress("DEPRECATION")
     private fun isOnline(): Boolean {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val ni = cm.activeNetworkInfo
-        return ni != null && ni.isConnected
+        val net = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(net) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     private fun createNotificationChannel() {
@@ -367,6 +499,21 @@ class TelegramPollingService : Service() {
             val channel = NotificationChannel(CHANNEL_ID, "Printer Bot", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
+    }
+
+    private fun updateNotification(text: String) {
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text))
+    }
+
+    // Local Android notification, used when Telegram itself is unreachable.
+    @Suppress("DEPRECATION")
+    private fun alert(title: String, text: String) {
+        val n = Notification.Builder(this)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(ALERT_NOTIF_ID, n)
     }
 
     // Android 7 / Sunmi ROM: the channel-based Notification.Builder constructor

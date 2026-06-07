@@ -12,6 +12,8 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 - **QR codes** — `/qr <text|url>` prints a scannable QR code
 - **Calendar agenda** — print events from *all* your Google calendars for today, tomorrow, a specific date, or the next 7 days
 - **Daily agenda** — optionally auto-print today's agenda every morning at a chosen hour
+- **Paper / printer monitoring** — printing pauses (without burning retries) and Telegram is notified when the head reports out-of-paper, overheating, or open cover, then resumes automatically
+- **Resilient polling** — exponential backoff on transient errors; a local Android alert and controlled stop on fatal Telegram errors (401 bad token / 403 blocked)
 - **Offline queue** — messages received while the printer is busy or offline are queued (Room/SQLite) and printed when ready, with a retry cap and failure reporting
 - **Print confirmations** — the bot replies when a job is actually printed, queued, or has failed
 - **Word wrapping** — long text wraps cleanly, accounting for the selected font size
@@ -23,7 +25,7 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 | Command | Action |
 |---|---|
 | *(any text)* | Print the text |
-| *(photo / image / PDF)* | Print it (auto-resized + dithered; PDF = first page) |
+| *(photo / image / PDF)* | Print it (auto-resized + dithered; PDF = up to N pages) |
 | `/agenda` | Print today's events |
 | `/agenda tomorrow` | Print tomorrow's events |
 | `/agenda week` | Print the next 7 days |
@@ -31,7 +33,10 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 | `/qr <text\|url>` | Print a QR code |
 | `/size` / `/size 32` | Show / set font size (range 16–48) |
 | `/daily 7` / `/daily off` | Auto-print today's agenda each morning at HH:00, or disable |
-| `/status` | Show system status (printer, calendar, queue, failed) |
+| `/tz Europe/Rome` / `/tz default` | Override the timezone, or use the device default |
+| `/pdfpages 5` | Max PDF pages to print (0 = all) |
+| `/status` | Show system status (printer state, calendar, queue, failed, tz) |
+| `/stats` | Print counters since install (total + per type) |
 | `/retry` | Requeue all permanently failed jobs |
 | `/clearqueue` | Drop all queued (not yet printed) jobs |
 | `/cut` | Feed and cut paper (if supported by the device) |

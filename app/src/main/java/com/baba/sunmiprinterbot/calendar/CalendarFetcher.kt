@@ -17,7 +17,10 @@ import java.util.TimeZone
 class CalendarFetcher(private val context: Context) {
 
     private val TAG = "CalendarFetcher"
-    private val zone = TimeZone.getTimeZone("Europe/Rome")
+    // Defaults to the device timezone; the service can override it from prefs
+    // (the original off-by-one bug came from a *misconfigured device* TZ, so a
+    // blind getDefault() isn't enough — an explicit override must be possible).
+    var zone: TimeZone = TimeZone.getDefault()
     private var calendarService: Calendar? = null
 
     fun setup(accountName: String) {
