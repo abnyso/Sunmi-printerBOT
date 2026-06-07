@@ -3,6 +3,7 @@ package com.baba.sunmiprinterbot.service
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -13,6 +14,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import androidx.core.content.edit
+import androidx.core.graphics.createBitmap
 import com.baba.sunmiprinterbot.MainActivity
 import com.baba.sunmiprinterbot.R
 import com.baba.sunmiprinterbot.calendar.CalendarFetcher
@@ -24,6 +27,7 @@ import com.baba.sunmiprinterbot.telegram.TelegramApi
 import kotlinx.coroutines.*
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 
@@ -40,7 +44,7 @@ class TelegramPollingService : Service() {
     private lateinit var printer: SunmiPrinter
     private lateinit var calendar: CalendarFetcher
     private lateinit var db: AppDatabase
-    private lateinit var prefs: android.content.SharedPreferences
+    private lateinit var prefs: SharedPreferences
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var pollingJob: Job? = null
@@ -50,7 +54,7 @@ class TelegramPollingService : Service() {
         super.onCreate()
         val token = getString(R.string.telegram_bot_token)
         val chatId = getString(R.string.telegram_chat_id)
-        prefs = getSharedPreferences("bot_prefs", Context.MODE_PRIVATE)
+        prefs = getSharedPreferences("bot_prefs", MODE_PRIVATE)
         telegram = TelegramApi(token, chatId, prefs)
         printer = SunmiPrinter(this)
         calendar = CalendarFetcher(this)
@@ -58,8 +62,9 @@ class TelegramPollingService : Service() {
         printer.bind()
         printer.textSize = prefs.getFloat("text_size", 24f)
         calendar.zone = zone()
-        prefs.getString("install_date", null) ?: prefs.edit()
-            .putString("install_date", isoDate()).apply()
+        if (prefs.getString("install_date", null) == null) {
+            prefs.edit { putString("install_date", isoDate()) }
+        }
         prefs.getString("google_account", null)?.let { calendar.setup(it) }
         createNotificationChannel()
     }
@@ -184,7 +189,7 @@ class TelegramPollingService : Service() {
                 val size = text.split(" ", limit = 2).getOrNull(1)?.toFloatOrNull()
                 if (size != null && size in 16f..48f) {
                     printer.textSize = size
-                    prefs.edit().putFloat("text_size", size).apply()
+                    prefs.edit { putFloat("text_size", size) }
                     telegram.sendMessage("Text size: " + size.toInt())
                 } else {
                     telegram.sendMessage("Usage: /size 16-48\nCurrent: " + printer.textSize.toInt() +
@@ -215,14 +220,16 @@ class TelegramPollingService : Service() {
         }
         if (isPdf) {
             val maxPages = prefs.getInt("pdf_max_pages", DEFAULT_PDF_PAGES)
-            val pages = renderPdfPages(file, maxPages)
+            val res = renderPdfPages(file, maxPages)
             file.delete()
-            if (pages.first.isEmpty()) {
+            val pages = res.first
+            val total = res.second
+            if (pages.isEmpty()) {
                 telegram.sendMessage("PDF render error")
             } else {
-                for (png in pages.first) enqueue(PrintJob(type = "image", content = png.absolutePath))
-                val truncated = if (pages.second) " (truncated to " + pages.first.size + " of more)" else ""
-                telegram.sendMessage("PDF queued: " + pages.first.size + " page(s)" + truncated)
+                for (png in pages) enqueue(PrintJob(type = "image", content = png.absolutePath))
+                val truncated = if (total > pages.size) " (truncated: printing " + pages.size + " of " + total + " pages)" else ""
+                telegram.sendMessage("PDF queued: " + pages.size + " page(s)" + truncated)
             }
         } else {
             enqueue(PrintJob(type = "image", content = file.absolutePath))
@@ -231,23 +238,22 @@ class TelegramPollingService : Service() {
     }
 
     // Renders up to maxPages (0 = all) to white-background PNGs at printer width.
-    // Returns the page files plus a flag telling whether more pages were skipped.
-    private fun renderPdfPages(pdf: File, maxPages: Int): Pair<List<File>, Boolean> {
+    // Returns the page files plus the total page count found in the PDF.
+    private fun renderPdfPages(pdf: File, maxPages: Int): Pair<List<File>, Int> {
         var pfd: ParcelFileDescriptor? = null
         var renderer: PdfRenderer? = null
         val out = mutableListOf<File>()
-        var truncated = false
+        var total = 0
         try {
             pfd = ParcelFileDescriptor.open(pdf, ParcelFileDescriptor.MODE_READ_ONLY)
             renderer = PdfRenderer(pfd)
-            val total = renderer.pageCount
+            total = renderer.pageCount
             val limit = if (maxPages <= 0) total else minOf(maxPages, total)
-            truncated = limit < total
             for (i in 0 until limit) {
                 val page = renderer.openPage(i)
                 val scale = PRINTER_WIDTH_PX.toFloat() / page.width
                 val h = (page.height * scale).toInt().coerceAtLeast(1)
-                val bmp = Bitmap.createBitmap(PRINTER_WIDTH_PX, h, Bitmap.Config.ARGB_8888)
+                val bmp = createBitmap(PRINTER_WIDTH_PX, h, Bitmap.Config.ARGB_8888)
                 Canvas(bmp).drawColor(Color.WHITE)
                 page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                 page.close()
@@ -262,7 +268,7 @@ class TelegramPollingService : Service() {
             try { renderer?.close() } catch (_: Exception) {}
             try { pfd?.close() } catch (_: Exception) {}
         }
-        return Pair(out, truncated)
+        return Pair(out, total)
     }
 
     private fun handleDailyCommand(text: String) {
@@ -270,13 +276,13 @@ class TelegramPollingService : Service() {
         when {
             arg == null -> telegram.sendMessage("Daily agenda: " + dailyAgendaStatus() + "\nUsage: /daily 7  or  /daily off")
             arg.equals("off", true) -> {
-                prefs.edit().putInt("daily_agenda_hour", -1).apply()
+                prefs.edit { putInt("daily_agenda_hour", -1) }
                 telegram.sendMessage("Daily agenda disabled")
             }
             else -> {
                 val hour = arg.toIntOrNull()
                 if (hour != null && hour in 0..23) {
-                    prefs.edit().putInt("daily_agenda_hour", hour).apply()
+                    prefs.edit { putInt("daily_agenda_hour", hour) }
                     telegram.sendMessage("Daily agenda set to " + hour + ":00")
                 } else {
                     telegram.sendMessage("Usage: /daily 0-23  or  /daily off")
@@ -291,7 +297,7 @@ class TelegramPollingService : Service() {
             arg == null -> telegram.sendMessage("Timezone: " + zone().id +
                     "\nUsage: /tz Europe/Rome  or  /tz default")
             arg.equals("default", true) -> {
-                prefs.edit().remove("timezone").apply()
+                prefs.edit { remove("timezone") }
                 calendar.zone = zone()
                 telegram.sendMessage("Timezone reset to device default: " + zone().id)
             }
@@ -301,7 +307,7 @@ class TelegramPollingService : Service() {
                 if (tz.id == "GMT" && !arg.equals("GMT", true) && !arg.equals("UTC", true)) {
                     telegram.sendMessage("Unknown timezone: " + arg + "\nUse an IANA id like Europe/Rome")
                 } else {
-                    prefs.edit().putString("timezone", tz.id).apply()
+                    prefs.edit { putString("timezone", tz.id) }
                     calendar.zone = tz
                     telegram.sendMessage("Timezone set to " + tz.id)
                 }
@@ -316,7 +322,7 @@ class TelegramPollingService : Service() {
             telegram.sendMessage("PDF page limit: " + prefs.getInt("pdf_max_pages", DEFAULT_PDF_PAGES) +
                     " (0 = all)\nUsage: /pdfpages 5")
         } else {
-            prefs.edit().putInt("pdf_max_pages", n).apply()
+            prefs.edit { putInt("pdf_max_pages", n) }
             telegram.sendMessage("PDF page limit set to " + (if (n == 0) "all" else n.toString()))
         }
     }
@@ -372,13 +378,13 @@ class TelegramPollingService : Service() {
         // -1 = state query unsupported on this model; assume we can print.
         if (st == -1 || st == 1) {
             if (prefs.getBoolean("printer_alerted", false)) {
-                prefs.edit().putBoolean("printer_alerted", false).apply()
+                prefs.edit { putBoolean("printer_alerted", false) }
                 telegram.sendMessage("Printer back to normal")
             }
             return true
         }
         if (!prefs.getBoolean("printer_alerted", false)) {
-            prefs.edit().putBoolean("printer_alerted", true).apply()
+            prefs.edit { putBoolean("printer_alerted", true) }
             telegram.sendMessage("Printing paused: " + statusReason(st))
         }
         return false
@@ -408,8 +414,11 @@ class TelegramPollingService : Service() {
                     if (!calendar.isReady()) false
                     else {
                         val (title, lines) = calendar.getAgenda(job.content)
-                        printer.printFormatted("AGENDA - " + title, lines)
-                        true
+                        if (title == "Error") false
+                        else {
+                            printer.printFormatted("AGENDA - " + title, lines)
+                            true
+                        }
                     }
                 }
                 else -> true
@@ -427,10 +436,10 @@ class TelegramPollingService : Service() {
     }
 
     private fun recordStat(job: PrintJob) {
-        prefs.edit()
-            .putInt("stat_total", prefs.getInt("stat_total", 0) + 1)
-            .putInt("stat_" + job.type, prefs.getInt("stat_" + job.type, 0) + 1)
-            .apply()
+        prefs.edit {
+            putInt("stat_total", prefs.getInt("stat_total", 0) + 1)
+            putInt("stat_" + job.type, prefs.getInt("stat_" + job.type, 0) + 1)
+        }
     }
 
     private fun statsText(): String {
@@ -457,11 +466,11 @@ class TelegramPollingService : Service() {
     private suspend fun maybeEnqueueDailyAgenda() {
         val hour = prefs.getInt("daily_agenda_hour", -1)
         if (hour < 0) return
-        val cal = java.util.Calendar.getInstance(zone())
+        val cal = Calendar.getInstance(zone())
         val today = isoDate()
-        if (cal.get(java.util.Calendar.HOUR_OF_DAY) < hour) return
+        if (cal.get(Calendar.HOUR_OF_DAY) < hour) return
         if (prefs.getString("last_agenda_date", null) == today) return
-        prefs.edit().putString("last_agenda_date", today).apply()
+        prefs.edit { putString("last_agenda_date", today) }
         enqueue(PrintJob(type = "agenda", content = "today"))
         telegram.sendMessage("Daily agenda queued")
     }
@@ -483,12 +492,12 @@ class TelegramPollingService : Service() {
 
     private fun isoDate(): String =
         SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = zone() }
-            .format(java.util.Calendar.getInstance(zone()).time)
+            .format(Calendar.getInstance(zone()).time)
 
     private fun imagesDir(): File = File(filesDir, "images").apply { mkdirs() }
 
     private fun isOnline(): Boolean {
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val net = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(net) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
