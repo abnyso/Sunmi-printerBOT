@@ -45,6 +45,16 @@ class SunmiPrinter(private val context: Context) {
 
     fun isReady(): Boolean = isConnected && printerService != null
 
+    // Sunmi updatePrinterState() codes: 1 normal, 4 out of paper, 5 overheated,
+    // 6 cover open. Returns -1 if the call is unavailable.
+    fun paperStatus(): Int = try {
+        printerService?.updatePrinterState() ?: -1
+    } catch (e: Exception) {
+        -1
+    }
+
+    fun isOutOfPaper(): Boolean = paperStatus() == 4
+
     fun printText(text: String) {
         val svc = printerService ?: return
         svc.printerInit(null)

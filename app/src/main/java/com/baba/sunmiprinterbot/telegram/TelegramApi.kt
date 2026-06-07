@@ -24,7 +24,20 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
 
     private fun baseUrl(): String = "https://api.telegram.org/bot" + token
 
-    data class TgResponse(val ok: Boolean, val result: List<TgUpdate>?)
+    // Outcome of one long-poll, so the caller can react to fatal auth errors
+    // (bad token / bot blocked) instead of looping on them forever.
+    sealed class PollResult {
+        data class Ok(val updates: List<TgUpdate>) : PollResult()
+        data class Fatal(val code: Int, val description: String) : PollResult()
+        object Transient : PollResult()
+    }
+
+    data class TgResponse(
+        val ok: Boolean,
+        val result: List<TgUpdate>?,
+        @SerializedName("error_code") val errorCode: Int?,
+        val description: String?
+    )
     data class TgUpdate(
         @SerializedName("update_id") val updateId: Long,
         val message: TgMessage?
@@ -56,21 +69,33 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
     fun isAllowed(update: TgUpdate): Boolean =
         update.message?.chat?.id.toString() == allowedChatId
 
-    // Returns every update from the long poll. The offset is NOT advanced here:
-    // the caller must confirm each update via confirmOffset() only after it has
-    // been durably enqueued, so a crash mid-processing cannot drop a message.
-    fun getUpdates(): List<TgUpdate> {
+    // Runs one long poll. The offset is NOT advanced here: the caller must
+    // confirm each update via confirmOffset() only after it has been durably
+    // enqueued, so a crash mid-processing cannot drop a message.
+    // Fatal auth errors (401 bad token, 403 bot blocked) are surfaced so the
+    // caller can stop instead of hammering Telegram forever.
+    fun getUpdates(): PollResult {
         return try {
             val offset = lastUpdateId + 1
             val url = baseUrl() + "/getUpdates?offset=" + offset + "&timeout=30"
             val request = Request.Builder().url(url).build()
             val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: return emptyList()
+            val code = response.code
+            val body = response.body?.string()
+            if (code == 401 || code == 403) {
+                return PollResult.Fatal(code, body ?: "auth error")
+            }
+            if (body == null) return PollResult.Transient
             val parsed = gson.fromJson(body, TgResponse::class.java)
-            parsed.result ?: emptyList()
+            if (parsed.ok != true) {
+                val ec = parsed.errorCode ?: code
+                if (ec == 401 || ec == 403) return PollResult.Fatal(ec, parsed.description ?: "auth error")
+                return PollResult.Transient
+            }
+            PollResult.Ok(parsed.result ?: emptyList())
         } catch (e: Exception) {
             Log.e(TAG, "Polling error: " + e.message)
-            emptyList()
+            PollResult.Transient
         }
     }
 
@@ -94,11 +119,12 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
             val downloadUrl = "https://api.telegram.org/file/bot" + token + "/" + filePath
             val dlReq = Request.Builder().url(downloadUrl).build()
             val dlResp = client.newCall(dlReq).execute()
-            val bytes = dlResp.body?.bytes() ?: return null
+            val src = dlResp.body ?: return null
 
             val ext = filePath.substringAfterLast('.', "bin")
             val dest = File(destDir, "tg_" + System.currentTimeMillis() + "." + ext)
-            dest.writeBytes(bytes)
+            // Stream straight to disk so a large file never lands fully in RAM.
+            src.byteStream().use { input -> dest.outputStream().use { input.copyTo(it) } }
             dest
         } catch (e: Exception) {
             Log.e(TAG, "Download file error: " + e.message)
