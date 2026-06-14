@@ -31,6 +31,7 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 | `/agenda week` | Print the next 7 days |
 | `/agenda 2026-04-15` | Print events for a specific date |
 | `/qr <text\|url>` | Print a QR code |
+| `/repeat` | Repeat the last executed command |
 | `/size` / `/size 32` | Show / set font size (range 16–48) |
 | `/daily 7` / `/daily off` | Auto-print today's agenda each morning at HH:00, or disable |
 | `/tz Europe/Rome` / `/tz default` | Override the timezone, or use the device default |

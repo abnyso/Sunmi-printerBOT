@@ -1,16 +1,17 @@
 package com.baba.sunmiprinterbot
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import com.baba.sunmiprinterbot.service.TelegramPollingService
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -31,8 +32,9 @@ class MainActivity : AppCompatActivity() {
             val account = task.result
             val email = account.email ?: return@registerForActivityResult
             // Salva account
-            getSharedPreferences("bot_prefs", Context.MODE_PRIVATE)
-                .edit().putString("google_account", email).apply()
+            getSharedPreferences("bot_prefs", MODE_PRIVATE).edit {
+                putString("google_account", email)
+            }
             updateStatus()
             // Riavvia service con nuovo account
             if (isServiceRunning()) {
@@ -40,7 +42,7 @@ class MainActivity : AppCompatActivity() {
                 startBotService()
             }
         } catch (e: Exception) {
-            statusText.text = "Errore Google Sign-In: ${e.message}"
+            statusText.text = getString(R.string.google_sign_in_error, e.message)
         }
     }
 
@@ -48,30 +50,30 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         // Layout programmatico (niente XML extra)
-        val layout = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(48, 96, 48, 48)
         }
 
         val title = TextView(this).apply {
-            text = "🖨 SunmiPrinterBot"
+            text = getString(R.string.app_title)
             textSize = 24f
             setPadding(0, 0, 0, 32)
         }
 
         statusText = TextView(this).apply {
-            text = "..."
+            text = getString(R.string.status_pending)
             textSize = 14f
             setPadding(0, 0, 0, 32)
         }
 
         btnGoogle = Button(this).apply {
-            text = "Accedi con Google"
+            text = getString(R.string.google_sign_in)
             setOnClickListener { signInGoogle() }
         }
 
         btnToggle = Button(this).apply {
-            text = "Avvia Bot"
+            text = getString(R.string.start_bot)
             setOnClickListener { toggleService() }
         }
 
@@ -107,36 +109,38 @@ class MainActivity : AppCompatActivity() {
     private fun startBotService() {
         val intent = Intent(this, TelegramPollingService::class.java)
         ContextCompat.startForegroundService(this, intent)
-        getSharedPreferences("bot_prefs", Context.MODE_PRIVATE)
-            .edit().putBoolean("service_enabled", true).apply()
+        getSharedPreferences("bot_prefs", MODE_PRIVATE).edit {
+            putBoolean("service_enabled", true)
+        }
     }
 
     private fun stopBotService() {
         stopService(Intent(this, TelegramPollingService::class.java))
-        getSharedPreferences("bot_prefs", Context.MODE_PRIVATE)
-            .edit().putBoolean("service_enabled", false).apply()
+        getSharedPreferences("bot_prefs", MODE_PRIVATE).edit {
+            putBoolean("service_enabled", false)
+        }
     }
 
     private fun isServiceRunning(): Boolean {
-        return getSharedPreferences("bot_prefs", Context.MODE_PRIVATE)
+        return getSharedPreferences("bot_prefs", MODE_PRIVATE)
             .getBoolean("service_enabled", false)
     }
 
     private fun updateStatus() {
-        val prefs = getSharedPreferences("bot_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("bot_prefs", MODE_PRIVATE)
         val account = prefs.getString("google_account", null)
         val running = prefs.getBoolean("service_enabled", false)
 
         val tokenOk = getString(R.string.telegram_bot_token) != "YOUR_BOT_TOKEN_HERE"
 
         statusText.text = buildString {
-            appendLine("Telegram Bot: ${if (tokenOk) "✅ configurato" else "❌ token mancante"}")
-            appendLine("Google: ${account ?: "❌ non connesso"}")
-            appendLine("Servizio: ${if (running) "🟢 attivo" else "⚫ fermo"}")
+            appendLine(getString(R.string.status_telegram_bot, if (tokenOk) getString(R.string.status_ok) else getString(R.string.status_missing_token)))
+            appendLine(getString(R.string.status_google, account ?: getString(R.string.status_not_connected)))
+            appendLine(getString(R.string.status_service, if (running) getString(R.string.status_active) else getString(R.string.status_stopped)))
         }
 
-        btnToggle.text = if (running) "Ferma Bot" else "Avvia Bot"
-        btnGoogle.text = if (account != null) "Cambia account ($account)" else "Accedi con Google"
+        btnToggle.text = if (running) getString(R.string.stop_bot) else getString(R.string.start_bot)
+        btnGoogle.text = if (account != null) getString(R.string.google_change_account, account) else getString(R.string.google_sign_in)
     }
 
     private fun requestNotificationPermission() {

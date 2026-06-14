@@ -2,6 +2,7 @@ package com.baba.sunmiprinterbot.telegram
 
 import android.content.SharedPreferences
 import android.util.Log
+import androidx.core.content.edit
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import okhttp3.FormBody
@@ -12,7 +13,7 @@ import java.util.concurrent.TimeUnit
 
 class TelegramApi(private val token: String, private val allowedChatId: String, private val prefs: SharedPreferences) {
 
-    private val TAG = "TelegramApi"
+    private val tag = "TelegramApi"
     private val gson = Gson()
 
     private val client = OkHttpClient.Builder()
@@ -22,7 +23,7 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
 
     private var lastUpdateId: Long = prefs.getLong("last_update_id", 0)
 
-    private fun baseUrl(): String = "https://api.telegram.org/bot" + token
+    private fun baseUrl(): String = "https://api.telegram.org/bot$token"
 
     // Outcome of one long-poll, so the caller can react to fatal auth errors
     // (bad token / bot blocked) instead of looping on them forever.
@@ -77,7 +78,7 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
     fun getUpdates(): PollResult {
         return try {
             val offset = lastUpdateId + 1
-            val url = baseUrl() + "/getUpdates?offset=" + offset + "&timeout=30"
+            val url = "${baseUrl()}/getUpdates?offset=$offset&timeout=30"
             val request = Request.Builder().url(url).build()
             val response = client.newCall(request).execute()
             val code = response.code
@@ -94,7 +95,7 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
             }
             PollResult.Ok(parsed.result ?: emptyList())
         } catch (e: Exception) {
-            Log.e(TAG, "Polling error: " + e.message)
+            Log.e(tag, "Polling error: ${e.message}")
             PollResult.Transient
         }
     }
@@ -103,31 +104,31 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
     fun confirmOffset(updateId: Long) {
         if (updateId > lastUpdateId) {
             lastUpdateId = updateId
-            prefs.edit().putLong("last_update_id", lastUpdateId).apply()
+            prefs.edit { putLong("last_update_id", lastUpdateId) }
         }
     }
 
     fun downloadFile(fileId: String, destDir: File): File? {
         return try {
-            val fileUrl = baseUrl() + "/getFile?file_id=" + fileId
+            val fileUrl = "${baseUrl()}/getFile?file_id=$fileId"
             val fileReq = Request.Builder().url(fileUrl).build()
             val fileResp = client.newCall(fileReq).execute()
             val fileBody = fileResp.body?.string() ?: return null
             val tgFile = gson.fromJson(fileBody, TgFileResponse::class.java)
             val filePath = tgFile.result?.filePath ?: return null
 
-            val downloadUrl = "https://api.telegram.org/file/bot" + token + "/" + filePath
+            val downloadUrl = "https://api.telegram.org/file/bot$token/$filePath"
             val dlReq = Request.Builder().url(downloadUrl).build()
             val dlResp = client.newCall(dlReq).execute()
             val src = dlResp.body ?: return null
 
             val ext = filePath.substringAfterLast('.', "bin")
-            val dest = File(destDir, "tg_" + System.currentTimeMillis() + "." + ext)
+            val dest = File(destDir, "tg_${System.currentTimeMillis()}.$ext")
             // Stream straight to disk so a large file never lands fully in RAM.
             src.byteStream().use { input -> dest.outputStream().use { input.copyTo(it) } }
             dest
         } catch (e: Exception) {
-            Log.e(TAG, "Download file error: " + e.message)
+            Log.e(tag, "Download file error: ${e.message}")
             null
         }
     }
@@ -139,10 +140,10 @@ class TelegramApi(private val token: String, private val allowedChatId: String, 
                 .add("chat_id", allowedChatId)
                 .add("text", text)
                 .build()
-            val request = Request.Builder().url(baseUrl() + "/sendMessage").post(body).build()
+            val request = Request.Builder().url("${baseUrl()}/sendMessage").post(body).build()
             client.newCall(request).execute().close()
         } catch (e: Exception) {
-            Log.e(TAG, "Send error: " + e.message)
+            Log.e(tag, "Send error: ${e.message}")
         }
     }
 }

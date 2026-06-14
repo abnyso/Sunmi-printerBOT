@@ -16,7 +16,7 @@ import java.util.TimeZone
 
 class CalendarFetcher(private val context: Context) {
 
-    private val TAG = "CalendarFetcher"
+    private val tag = "CalendarFetcher"
     // Defaults to the device timezone; the service can override it from prefs
     // (the original off-by-one bug came from a *misconfigured device* TZ, so a
     // blind getDefault() isn't enough — an explicit override must be possible).
@@ -35,9 +35,9 @@ class CalendarFetcher(private val context: Context) {
                 GsonFactory.getDefaultInstance(),
                 credential
             ).setApplicationName("SunmiPrinterBot").build()
-            Log.d(TAG, "Calendar setup OK for " + accountName)
+            Log.d(tag, "Calendar setup OK for $accountName")
         } catch (e: Exception) {
-            Log.e(TAG, "Setup error: " + e.message, e)
+            Log.e(tag, "Setup error: ${e.message}", e)
         }
     }
 
@@ -48,16 +48,14 @@ class CalendarFetcher(private val context: Context) {
     fun getAgenda(spec: String?): Pair<String, List<String>> {
         return when (spec?.lowercase()?.trim()) {
             null, "", "today", "oggi" -> getEventsForDay(null)
-            "tomorrow", "domani" -> getEventsForDay(dayOffset(1))
+            "tomorrow", "domani" -> {
+                val cal = java.util.Calendar.getInstance(zone)
+                cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                getEventsForDay(isoDate(cal))
+            }
             "week", "settimana" -> getEventsForWeek()
             else -> getEventsForDay(spec)
         }
-    }
-
-    private fun dayOffset(days: Int): String {
-        val cal = java.util.Calendar.getInstance(zone)
-        cal.add(java.util.Calendar.DAY_OF_YEAR, days)
-        return isoDate(cal)
     }
 
     fun getEventsForDay(dateStr: String? = null): Pair<String, List<String>> {
@@ -68,7 +66,7 @@ class CalendarFetcher(private val context: Context) {
                 val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { timeZone = zone }
                 cal.time = sdf.parse(dateStr) ?: cal.time
             } catch (e: Exception) {
-                Log.e(TAG, "Date parse error: " + e.message)
+                Log.e(tag, "Date parse error: ${e.message}")
             }
         }
         val title = SimpleDateFormat("EEEE dd MMMM yyyy", Locale.ENGLISH).apply { timeZone = zone }.format(cal.time)
@@ -87,7 +85,7 @@ class CalendarFetcher(private val context: Context) {
             day.add(java.util.Calendar.DAY_OF_YEAR, i)
             val lines = eventLinesForDay(day)
             if (lines.isNotEmpty()) {
-                out.add("[" + header.format(day.time) + "]")
+                out.add("[${header.format(day.time)}]")
                 out.addAll(lines)
             }
         }
@@ -113,7 +111,7 @@ class CalendarFetcher(private val context: Context) {
         val calList = try {
             svc.calendarList().list().execute().items ?: emptyList()
         } catch (e: Exception) {
-            Log.e(TAG, "CalendarList error: " + e.message)
+            Log.e(tag, "CalendarList error: ${e.message}")
             listOf(com.google.api.services.calendar.model.CalendarListEntry().setId("primary"))
         }
 
@@ -139,7 +137,7 @@ class CalendarFetcher(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching cal " + calEntry.id + ": " + e.message)
+                Log.e(tag, "Error fetching cal ${calEntry.id}: ${e.message}")
             }
         }
 
@@ -151,9 +149,9 @@ class CalendarFetcher(private val context: Context) {
         val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault()).apply { timeZone = zone }
         return events.map { event ->
             val summary = event.summary ?: "(no title)"
-            val location = if (event.location != null) " @ " + event.location else ""
+            val location = if (event.location != null) " @ ${event.location}" else ""
             if (event.start?.dateTime != null) {
-                timeFmt.format(Date(event.start.dateTime.value)) + "  " + summary + location
+                timeFmt.format(Date(event.start.dateTime.value)) + "  $summary$location"
             } else {
                 summary + location
             }

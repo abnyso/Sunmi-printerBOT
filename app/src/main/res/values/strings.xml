@@ -1,4 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SunmiPrinterBot</string>
+    <string name="google_sign_in_error">Errore Google Sign-In: %1$s</string>
+    <string name="app_title">🖨 SunmiPrinterBot</string>
+    <string name="status_pending">...</string>
+    <string name="google_sign_in">Accedi con Google</string>
+    <string name="start_bot">Avvia Bot</string>
+    <string name="stop_bot">Ferma Bot</string>
+    <string name="google_change_account">Cambia account (%1$s)</string>
+    <string name="status_telegram_bot">Telegram Bot: %1$s</string>
+    <string name="status_google">Google: %1$s</string>
+    <string name="status_service">Servizio: %1$s</string>
+    <string name="status_ok">✅ configurato</string>
+    <string name="status_missing_token">❌ token mancante</string>
+    <string name="status_not_connected">❌ non connesso</string>
+    <string name="status_active">🟢 attivo</string>
+    <string name="status_stopped">⚫ fermo</string>
 </resources>

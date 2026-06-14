@@ -5,15 +5,17 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.util.Log
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import com.sunmi.peripheral.printer.*
 
 class SunmiPrinter(private val context: Context) {
 
-    private val TAG = "SunmiPrinter"
+    private val tag = "SunmiPrinter"
     private var printerService: SunmiPrinterService? = null
     private var isConnected = false
-    private val PRINTER_WIDTH_PX = 384
-    private val TAIL_LINES = 4
+    private val printerWidthPx = 384
+    private val tailLines = 4
     // Read from the queue thread, written from the polling thread.
     @Volatile var textSize: Float = 24f
 
@@ -21,7 +23,7 @@ class SunmiPrinter(private val context: Context) {
         override fun onConnected(service: SunmiPrinterService?) {
             printerService = service
             isConnected = true
-            Log.d(TAG, "Printer connected")
+            Log.d(tag, "Printer connected")
         }
         override fun onDisconnected() {
             printerService = null
@@ -33,14 +35,14 @@ class SunmiPrinter(private val context: Context) {
         try {
             InnerPrinterManager.getInstance().bindService(context, connectCallback)
         } catch (e: Exception) {
-            Log.e(TAG, "Bind error: " + e.message)
+            Log.e(tag, "Bind error: " + e.message)
         }
     }
 
     fun unbind() {
         try {
             InnerPrinterManager.getInstance().unBindService(context, connectCallback)
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
     }
 
     fun isReady(): Boolean = isConnected && printerService != null
@@ -49,11 +51,9 @@ class SunmiPrinter(private val context: Context) {
     // 6 cover open. Returns -1 if the call is unavailable.
     fun paperStatus(): Int = try {
         printerService?.updatePrinterState() ?: -1
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         -1
     }
-
-    fun isOutOfPaper(): Boolean = paperStatus() == 4
 
     fun printText(text: String) {
         val svc = printerService ?: return
@@ -62,7 +62,7 @@ class SunmiPrinter(private val context: Context) {
         svc.setFontSize(textSize, null)
         val wrapped = wordWrap(text, (768 / textSize).toInt())
         svc.printText(wrapped + "\n", null)
-        svc.lineWrap(TAIL_LINES, null)
+        svc.lineWrap(tailLines, null)
     }
 
     // Wraps text to fit the paper width for the current font size.
@@ -125,7 +125,7 @@ class SunmiPrinter(private val context: Context) {
         svc.lineWrap(6, null)
         svc.setAlignment(1, null)
         svc.printText("--------------------------------\n", null)
-        svc.lineWrap(TAIL_LINES, null)
+        svc.lineWrap(tailLines, null)
     }
 
     fun printImage(imagePath: String) {
@@ -136,22 +136,10 @@ class SunmiPrinter(private val context: Context) {
         svc.printerInit(null)
         svc.setAlignment(1, null)
         svc.printBitmap(dithered, null)
-        svc.lineWrap(TAIL_LINES, null)
+        svc.lineWrap(tailLines, null)
         if (resized != original) resized.recycle()
         if (dithered != resized) dithered.recycle()
         original.recycle()
-    }
-
-    fun printBitmap(bitmap: Bitmap) {
-        val svc = printerService ?: return
-        val resized = resizeToPrinterWidth(bitmap)
-        val dithered = floydSteinbergDither(resized)
-        svc.printerInit(null)
-        svc.setAlignment(1, null)
-        svc.printBitmap(dithered, null)
-        svc.lineWrap(TAIL_LINES, null)
-        if (resized != bitmap) resized.recycle()
-        if (dithered != resized) dithered.recycle()
     }
 
     // Returns true only if the cut actually happened. The V2 Pro and other
@@ -162,8 +150,8 @@ class SunmiPrinter(private val context: Context) {
         return try {
             svc.cutPaper(null)
             true
-        } catch (e: Exception) {
-            Log.w(TAG, "Cut not supported")
+        } catch (_: Exception) {
+            Log.w(tag, "Cut not supported")
             false
         }
     }
@@ -174,7 +162,7 @@ class SunmiPrinter(private val context: Context) {
         svc.printerInit(null)
         svc.setAlignment(1, null)
         svc.printQRCode(content, moduleSize, 3, null)
-        svc.lineWrap(TAIL_LINES, null)
+        svc.lineWrap(tailLines, null)
     }
 
     // Decodes only large enough to cover the printer width, halving on each
@@ -184,16 +172,16 @@ class SunmiPrinter(private val context: Context) {
         BitmapFactory.decodeFile(imagePath, bounds)
         if (bounds.outWidth <= 0) return null
         var sample = 1
-        while (bounds.outWidth / (sample * 2) >= PRINTER_WIDTH_PX) sample *= 2
+        while (bounds.outWidth / (sample * 2) >= printerWidthPx) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         return BitmapFactory.decodeFile(imagePath, opts)
     }
 
     private fun resizeToPrinterWidth(bitmap: Bitmap): Bitmap {
-        if (bitmap.width <= PRINTER_WIDTH_PX) return bitmap
-        val ratio = PRINTER_WIDTH_PX.toFloat() / bitmap.width
+        if (bitmap.width <= printerWidthPx) return bitmap
+        val ratio = printerWidthPx.toFloat() / bitmap.width
         val newHeight = (bitmap.height * ratio).toInt()
-        return Bitmap.createScaledBitmap(bitmap, PRINTER_WIDTH_PX, newHeight, true)
+        return bitmap.scale(printerWidthPx, newHeight, true)
     }
 
     // Floyd-Steinberg dithering: converts grayscale to 1-bit
@@ -223,9 +211,13 @@ class SunmiPrinter(private val context: Context) {
 
                 if (x + 1 < w)           gray[idx + 1]     += err * 7f / 16f
                 if (y + 1 < h) {
-                    if (x - 1 >= 0)      gray[idx + w - 1] += err * 3f / 16f
-                                         gray[idx + w]     += err * 5f / 16f
-                    if (x + 1 < w)       gray[idx + w + 1] += err * 1f / 16f
+                    if (x - 1 >= 0) {
+                        gray[idx + w - 1] += err * 3f / 16f
+                    }
+                    gray[idx + w] += err * 5f / 16f
+                    if (x + 1 < w) {
+                        gray[idx + w + 1] += err * 1f / 16f
+                    }
                 }
             }
         }
@@ -236,7 +228,7 @@ class SunmiPrinter(private val context: Context) {
             result[i] = Color.rgb(v, v, v)
         }
 
-        val output = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
+        val output = createBitmap(w, h, Bitmap.Config.RGB_565)
         output.setPixels(result, 0, w, 0, 0, w, h)
         return output
     }
