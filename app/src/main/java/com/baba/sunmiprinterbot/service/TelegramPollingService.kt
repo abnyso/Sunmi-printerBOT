@@ -183,6 +183,10 @@ class TelegramPollingService : Service() {
                 }
             }
             text == "/stats" -> telegram.sendMessage(statsText())
+            text == "/test" -> {
+                enqueue(PrintJob(type = "test", content = ""))
+                telegram.sendMessage("Calibration page queued")
+            }
             text == "/cut" -> {
                 telegram.sendMessage(if (printer.cut()) "Paper cut" else "Cut not supported on this model")
             }
@@ -427,6 +431,7 @@ class TelegramPollingService : Service() {
                 "text" -> { printer.printText(job.content); true }
                 "image" -> { printer.printImage(job.content); true }
                 "qr" -> { printer.printQRCode(job.content); true }
+                "test" -> { printer.printTestPage(); true }
                 "agenda" -> {
                     if (!calendar.isReady()) false
                     else {
@@ -475,6 +480,7 @@ class TelegramPollingService : Service() {
         "text" -> "text (${job.content.take(20)})"
         "image" -> "image"
         "qr" -> "QR"
+        "test" -> "calibration"
         "agenda" -> "agenda"
         else -> job.type
     }
@@ -501,7 +507,7 @@ class TelegramPollingService : Service() {
         "/daily <0-23|off>\n" +
         "/tz <IANA|default>\n" +
         "/pdfpages <n|0=all>\n" +
-        "/status  /stats  /retry  /clearqueue  /cut"
+        "/status  /stats  /test  /retry  /clearqueue  /cut"
 
     private fun zone(): TimeZone {
         val id = prefs.getString("timezone", null)

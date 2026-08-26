@@ -38,6 +38,7 @@ Send a message, photo, or calendar command to your private Telegram bot, and the
 | `/pdfpages 5` | Max PDF pages to print (0 = all) |
 | `/status` | Show system status (printer state, calendar, queue, failed, tz) |
 | `/stats` | Print counters since install (total + per type) |
+| `/test` | Print a calibration page (gradients, lines, targets) |
 | `/retry` | Requeue all permanently failed jobs |
 | `/clearqueue` | Drop all queued (not yet printed) jobs |
 | `/cut` | Feed and cut paper (if supported by the device) |
