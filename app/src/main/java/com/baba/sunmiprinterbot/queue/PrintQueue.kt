@@ -9,7 +9,7 @@ const val MAX_RETRIES = 5
 @Entity(tableName = "print_jobs")
 data class PrintJob(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val type: String,          // "text", "image", "agenda", "qr"
+    val type: String,          // "text", "image", "agenda", "qr", "test"
     val content: String,       // testo, path immagine o data ISO
     val createdAt: Long = System.currentTimeMillis(),
     val printed: Boolean = false,
@@ -50,7 +50,7 @@ interface PrintJobDao {
     suspend fun cleanOld(before: Long)
 }
 
-@Database(entities = [PrintJob::class], version = 2)
+@Database(entities = [PrintJob::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun printJobDao(): PrintJobDao
 

@@ -3,7 +3,9 @@ package com.baba.sunmiprinterbot.printer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
@@ -163,6 +165,79 @@ class SunmiPrinter(private val context: Context) {
         svc.setAlignment(1, null)
         svc.printQRCode(content, moduleSize, 3, null)
         svc.lineWrap(tailLines, null)
+    }
+
+    fun printTestPage() {
+        val svc = printerService ?: return
+        val h = 800
+        val bmp = createBitmap(printerWidthPx, h, Bitmap.Config.RGB_565)
+        val canvas = Canvas(bmp)
+        val paint = Paint()
+
+        // Background white
+        canvas.drawColor(Color.WHITE)
+        paint.color = Color.BLACK
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1f
+
+        // 1. Four corner targets (rectangles)
+        val targetSize = 20f
+        canvas.drawRect(0f, 0f, targetSize, targetSize, paint) // Top-left
+        canvas.drawRect(printerWidthPx - targetSize, 0f, printerWidthPx.toFloat(), targetSize, paint) // Top-right
+        canvas.drawRect(0f, h - targetSize, targetSize, h.toFloat(), paint) // Bottom-left
+        canvas.drawRect(printerWidthPx - targetSize, h - targetSize, printerWidthPx.toFloat(), h.toFloat(), paint) // Bottom-right
+
+        // Crosshairs in corners
+        canvas.drawLine(targetSize/2, 0f, targetSize/2, targetSize, paint)
+        canvas.drawLine(0f, targetSize/2, targetSize, targetSize/2, paint)
+        canvas.drawLine(printerWidthPx - targetSize/2, 0f, printerWidthPx - targetSize/2, targetSize, paint)
+        canvas.drawLine(printerWidthPx - targetSize, targetSize/2, printerWidthPx.toFloat(), targetSize/2, paint)
+
+        // 2. Variable thickness lines (Horizontal)
+        var currentY = 50f
+        paint.style = Paint.Style.FILL
+        val thicknesses = listOf(1f, 2f, 4f, 8f, 12f)
+        for (t in thicknesses) {
+            paint.strokeWidth = t
+            canvas.drawLine(targetSize, currentY, printerWidthPx - targetSize, currentY, paint)
+            currentY += 30f
+        }
+
+        // 3. Grayscale gradient (10 steps)
+        currentY += 20f
+        val steps = 10
+        val stepHeight = 40f
+        for (i in 0 until steps) {
+            val gray = (255 * i / (steps - 1))
+            paint.color = Color.rgb(gray, gray, gray)
+            canvas.drawRect(targetSize, currentY, printerWidthPx - targetSize, currentY + stepHeight, paint)
+            currentY += stepHeight
+        }
+
+        // 4. Variable thickness lines (Vertical)
+        currentY += 40f
+        paint.color = Color.BLACK
+        var currentX = targetSize + 20f
+        for (t in thicknesses) {
+            paint.strokeWidth = t
+            canvas.drawLine(currentX, currentY, currentX, currentY + 100f, paint)
+            currentX += 40f
+        }
+
+        // Label
+        paint.strokeWidth = 1f
+        paint.textSize = 20f
+        canvas.drawText("SUNMI V2 PRO CALIBRATION", 50f, currentY + 140f, paint)
+
+        // Dither and print
+        val dithered = floydSteinbergDither(bmp)
+        svc.printerInit(null)
+        svc.setAlignment(1, null)
+        svc.printBitmap(dithered, null)
+        svc.lineWrap(tailLines, null)
+
+        bmp.recycle()
+        dithered.recycle()
     }
 
     // Decodes only large enough to cover the printer width, halving on each
