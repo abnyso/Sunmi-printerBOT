@@ -46,11 +46,18 @@ class TelegramPollingService : Service() {
     private lateinit var prefs: SharedPreferences
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var pollingJob: Job? = null
     private var queueJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "SunmiPrinterBot:WakeLock")
+        // Acquire the WakeLock to maintain background polling and queue processing.
+        // The timeout helps avoid permanent drain if the service is killed unexpectedly.
+        wakeLock?.acquire(10 * 60 * 1000L)
+
         val token = getString(R.string.telegram_bot_token)
         val chatId = getString(R.string.telegram_chat_id)
         prefs = getSharedPreferences("bot_prefs", MODE_PRIVATE)
@@ -80,6 +87,7 @@ class TelegramPollingService : Service() {
     override fun onDestroy() {
         scope.cancel()
         printer.unbind()
+        if (wakeLock?.isHeld == true) wakeLock?.release()
         super.onDestroy()
     }
 
@@ -89,6 +97,11 @@ class TelegramPollingService : Service() {
             Log.d(tag, "Polling loop started")
             var backoff = 3000L
             while (isActive) {
+                // Refresh wakeLock to ensure we don't time out while active
+                if (wakeLock?.isHeld == false) {
+                    wakeLock?.acquire(10 * 60 * 1000L)
+                }
+
                 if (!isOnline()) {
                     delay(5000)
                     continue
@@ -187,6 +200,16 @@ class TelegramPollingService : Service() {
                 enqueue(PrintJob(type = "test", content = ""))
                 telegram.sendMessage("Calibration page queued")
             }
+            text.startsWith("/feed") -> {
+                val arg = text.split(" ", limit = 2).getOrNull(1)?.trim()
+                val mm = arg?.toIntOrNull() ?: 70
+                if (mm in 1..500) {
+                    enqueue(PrintJob(type = "feed", content = mm.toString()))
+                    telegram.sendMessage("Feed of $mm mm queued")
+                } else {
+                    telegram.sendMessage("Usage: /feed [mm] (1-500). Default: 70mm")
+                }
+            }
             text == "/cut" -> {
                 telegram.sendMessage(if (printer.cut()) "Paper cut" else "Cut not supported on this model")
             }
@@ -233,7 +256,7 @@ class TelegramPollingService : Service() {
         val isPdf = mime == "application/pdf" || name.endsWith(".pdf", true)
         val isImage = mime.startsWith("image/")
         if (!isPdf && !isImage) {
-            telegram.sendMessage("Unsupported file type: " + mime)
+            telegram.sendMessage("Unsupported file type: $mime")
             return
         }
         val file = telegram.downloadFile(doc.fileId, imagesDir())
@@ -306,7 +329,7 @@ class TelegramPollingService : Service() {
                 val hour = arg.toIntOrNull()
                 if (hour != null && hour in 0..23) {
                     prefs.edit { putInt("daily_agenda_hour", hour) }
-                    telegram.sendMessage("Daily agenda set to " + hour + ":00")
+                    telegram.sendMessage("Daily agenda set to $hour:00")
                 } else {
                     telegram.sendMessage("Usage: /daily 0-23  or  /daily off")
                 }
@@ -328,11 +351,11 @@ class TelegramPollingService : Service() {
                 val tz = TimeZone.getTimeZone(arg)
                 // getTimeZone falls back to GMT for unknown IDs; reject that unless asked.
                 if (tz.id == "GMT" && !arg.equals("GMT", true) && !arg.equals("UTC", true)) {
-                    telegram.sendMessage("Unknown timezone: " + arg + "\nUse an IANA id like Europe/Rome")
+                    telegram.sendMessage("Unknown timezone: $arg\nUse an IANA id like Europe/Rome")
                 } else {
                     prefs.edit { putString("timezone", tz.id) }
                     calendar.zone = tz
-                    telegram.sendMessage("Timezone set to " + tz.id)
+                    telegram.sendMessage("Timezone set to ${tz.id}")
                 }
             }
         }
@@ -351,7 +374,7 @@ class TelegramPollingService : Service() {
 
     private fun dailyAgendaStatus(): String {
         val h = prefs.getInt("daily_agenda_hour", -1)
-        return if (h < 0) "off" else h.toString() + ":00"
+        return if (h < 0) "off" else "$h:00"
     }
 
     private suspend fun enqueue(job: PrintJob) {
@@ -432,13 +455,14 @@ class TelegramPollingService : Service() {
                 "image" -> { printer.printImage(job.content); true }
                 "qr" -> { printer.printQRCode(job.content); true }
                 "test" -> { printer.printTestPage(); true }
+                "feed" -> { printer.feedPaper(job.content.toIntOrNull() ?: 70); true }
                 "agenda" -> {
                     if (!calendar.isReady()) false
                     else {
                         val (title, lines) = calendar.getAgenda(job.content)
                         if (title == "Error") false
                         else {
-                            printer.printFormatted("AGENDA - $title", lines)
+                            printer.printFormatted(title, lines)
                             true
                         }
                     }
@@ -481,6 +505,7 @@ class TelegramPollingService : Service() {
         "image" -> "image"
         "qr" -> "QR"
         "test" -> "calibration"
+        "feed" -> "paper feed (${job.content}mm)"
         "agenda" -> "agenda"
         else -> job.type
     }
@@ -507,7 +532,7 @@ class TelegramPollingService : Service() {
         "/daily <0-23|off>\n" +
         "/tz <IANA|default>\n" +
         "/pdfpages <n|0=all>\n" +
-        "/status  /stats  /test  /retry  /clearqueue  /cut"
+        "/status  /stats  /test  /feed [mm]  /retry  /clearqueue  /cut"
 
     private fun zone(): TimeZone {
         val id = prefs.getString("timezone", null)

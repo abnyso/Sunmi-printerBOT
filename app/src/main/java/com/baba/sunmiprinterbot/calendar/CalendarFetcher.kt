@@ -147,15 +147,22 @@ class CalendarFetcher(private val context: Context) {
         if (events.isEmpty()) return emptyList()
 
         val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault()).apply { timeZone = zone }
-        return events.map { event ->
+        val out = mutableListOf<String>()
+        for (event in events) {
             val summary = event.summary ?: "(no title)"
             val location = if (event.location != null) " @ ${event.location}" else ""
-            if (event.start?.dateTime != null) {
+            val line = if (event.start?.dateTime != null) {
                 timeFmt.format(Date(event.start.dateTime.value)) + "  $summary$location"
             } else {
                 summary + location
             }
+            out.add(line)
+            if (!event.description.isNullOrBlank()) {
+                // Restore the NOTES part after the event details
+                out.add("  NOTES: ${event.description.replace("\n", " ")}")
+            }
         }
+        return out
     }
 
     private fun isoDate(cal: java.util.Calendar): String =
