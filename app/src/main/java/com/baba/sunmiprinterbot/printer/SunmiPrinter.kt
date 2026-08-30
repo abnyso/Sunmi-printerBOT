@@ -136,38 +136,31 @@ class SunmiPrinter(private val context: Context) {
         svc.sendRAWData(byteArrayOf(0x1B, 0x33, 0x1E), null)
         svc.setAlignment(1, null)
         svc.printBitmap(ditheredHeader, null)
-        
+
         // 1. Dash line after logo
         svc.printText("--------------------------------\n", null)
-        
+
         // 2. Title (date)
         svc.sendRAWData(byteArrayOf(0x1B, 0x45, 0x01), null)
         svc.printText("$title\n", null)
         svc.sendRAWData(byteArrayOf(0x1B, 0x45, 0x00), null)
-        
+
         // 3. Dash line before content
         svc.printText("--------------------------------\n", null)
         
         svc.setAlignment(0, null)
         // 4. Uniform spacing for events
         lines.filter { it.isNotBlank() }.forEach { line ->
-            when {
-                line.startsWith("  ") -> {
-                    // Notes or "No events" placeholders: printed as-is (indented)
-                    svc.printText("$line\n", null)
-                }
-                line.startsWith("[") && line.endsWith("]") -> {
-                    // Weekly headers: [Mon 22 May]
-                    svc.printText("$line\n", null)
-                }
-                else -> {
-                    // Standard event lines
-                    svc.printText("- $line\n", null)
-                }
+            val content = when {
+                line.startsWith("  ") -> line
+                line.startsWith("[") && line.endsWith("]") -> line
+                else -> "- $line"
             }
+            svc.printText(content + "\n", null)
         }
         
         svc.setAlignment(1, null)
+        // Ensure no empty line before the closing divider
         svc.printText("--------------------------------\n", null)
         svc.printText("NOTES\n", null)
         svc.lineWrap(6, null)
